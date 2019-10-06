@@ -56,13 +56,14 @@ var (
 )
 
 type test struct {
-	Name          string   `json:"name"`
-	Data          []string `json:"data"`
-	Query         []string `json:"query"`
-	ResultMetrics []Metric `json:"result_metrics"`
-	ResultSeries  Series   `json:"result_series"`
-	ResultQuery   Query    `json:"result_query"`
-	Issue         string   `json:"issue"`
+	Name             string     `json:"name"`
+	Data             []string   `json:"data"`
+	Query            []string   `json:"query"`
+	ResultMetrics    []Metric   `json:"result_metrics"`
+	ResultSeries     Series     `json:"result_series"`
+	ResultQuery      Query      `json:"result_query"`
+	ResultQueryRange QueryRange `json:"result_query_range"`
+	Issue            string     `json:"issue"`
 }
 
 type Metric struct {
@@ -96,6 +97,25 @@ type QueryDataResult struct {
 
 func (r *QueryDataResult) UnmarshalJSON(b []byte) error {
 	type plain QueryDataResult
+	return json.Unmarshal(testutil.PopulateTimeTpl(b, insertionTime), (*plain)(r))
+}
+
+type QueryRange struct {
+	Status string         `json:"status"`
+	Data   QueryRangeData `json:"data"`
+}
+type QueryRangeData struct {
+	ResultType string                 `json:"resultType"`
+	Result     []QueryRangeDataResult `json:"result"`
+}
+
+type QueryRangeDataResult struct {
+	Metric map[string]string `json:"metric"`
+	Values [][]interface{}   `json:"values"`
+}
+
+func (r *QueryRangeDataResult) UnmarshalJSON(b []byte) error {
+	type plain QueryRangeDataResult
 	return json.Unmarshal(testutil.PopulateTimeTpl(b, insertionTime), (*plain)(r))
 }
 
@@ -250,7 +270,9 @@ func testRead(t *testing.T) {
 							httpReadStruct(t, testReadHTTPPath, q, &s)
 							checkSeriesResult(t, s, test.ResultSeries, q, test.Issue)
 						case strings.HasPrefix(q, "/api/v1/query_range"):
-							t.Fatalf("unsupported read query %s", q)
+							queryResult := QueryRange{}
+							httpReadStruct(t, testReadHTTPPath, q, &queryResult)
+							checkQueryRangeResult(t, queryResult, test.ResultQueryRange, q, test.Issue)
 						case strings.HasPrefix(q, "/api/v1/query"):
 							queryResult := Query{}
 							httpReadStruct(t, testReadHTTPPath, q, &queryResult)
@@ -409,6 +431,36 @@ func checkQueryResult(t *testing.T, got, want Query, query, issue string) {
 func removeIfFoundQueryData(r QueryDataResult, contains []QueryDataResult) []QueryDataResult {
 	for i, item := range contains {
 		if reflect.DeepEqual(r.Metric, item.Metric) && reflect.DeepEqual(r.Value[0], item.Value[0]) && reflect.DeepEqual(r.Value[1], item.Value[1]) {
+			contains[i] = contains[len(contains)-1]
+			return contains[:len(contains)-1]
+		}
+	}
+	return contains
+}
+
+func checkQueryRangeResult(t *testing.T, got, want QueryRange, query, issue string) {
+	t.Helper()
+	if got.Status != want.Status {
+		t.Fatalf("query %s. Result Query Range status mismatch %q - %q. %s", query, want.Status, got.Status, issue)
+	}
+	if got.Data.ResultType != want.Data.ResultType {
+		t.Fatalf("query %s. Result Query Range Data ResultType status mismatch %q - %q. %s", query, want.Data.ResultType, got.Data.ResultType, issue)
+	}
+	wantData := append([]QueryRangeDataResult(nil), want.Data.Result...)
+	for _, r := range got.Data.Result {
+		wantData = removeIfFoundQueryRangeData(r, wantData)
+	}
+	if len(wantData) > 0 {
+		if issue != "" {
+			issue = "Regression in " + issue
+		}
+		t.Fatalf("query %s. Result query range %+v not found in %+v.%s", query, wantData, got.Data.Result, issue)
+	}
+}
+
+func removeIfFoundQueryRangeData(r QueryRangeDataResult, contains []QueryRangeDataResult) []QueryRangeDataResult {
+	for i, item := range contains {
+		if reflect.DeepEqual(r.Metric, item.Metric) && reflect.DeepEqual(r.Values, item.Values) {
 			contains[i] = contains[len(contains)-1]
 			return contains[:len(contains)-1]
 		}
